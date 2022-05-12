@@ -33,7 +33,7 @@ import java.util.regex.Pattern;
  */
 public class ColumnSnapshotGenerator extends HibernateSnapshotGenerator {
 
-    private final static Pattern pattern = Pattern.compile("([^\\(]*)\\s*\\(?\\s*(\\d*)?\\s*,?\\s*(\\d*)?\\s*([^\\(]*?)\\)?");
+    private final static Pattern pattern = Pattern.compile("([^\\(]*)\\s*\\(?\\s*(max|\\d*)?\\s*,?\\s*(\\d*)?\\s*([^\\(]*?)\\)?");
 
     public ColumnSnapshotGenerator() {
         super(Column.class, new Class[]{Table.class});
@@ -189,7 +189,11 @@ public class ColumnSnapshotGenerator extends HibernateSnapshotGenerator {
         DataType dataType = new DataType(matcher.group(1));
         if (matcher.group(3).isEmpty()) {
             if (!matcher.group(2).isEmpty()) {
-                dataType.setColumnSize(Integer.parseInt(matcher.group(2)));
+                if (matcher.group(2).equalsIgnoreCase("max")) {
+                    dataType.setTypeName(dataType.getTypeName() + "(max)");
+                } else {
+                    dataType.setColumnSize(Integer.parseInt(matcher.group(2)));
+                }
             }
         } else {
             dataType.setColumnSize(Integer.parseInt(matcher.group(2)));
