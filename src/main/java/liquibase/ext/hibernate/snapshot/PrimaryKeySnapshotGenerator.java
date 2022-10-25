@@ -11,11 +11,22 @@ import liquibase.structure.core.PrimaryKey;
 import liquibase.structure.core.Table;
 import org.hibernate.sql.Alias;
 
+import java.util.ServiceLoader;
+
 public class PrimaryKeySnapshotGenerator extends HibernateSnapshotGenerator {
 
     private static final int PK_NAME_LENGTH = 63;
     private static final String PK_NAME_SUFFIX = "PK";
-    private static final Alias PK_NAME_ALIAS = new Alias(PK_NAME_LENGTH, PK_NAME_SUFFIX);
+    private static final Alias PK_NAME_ALIAS = new Alias(PK_NAME_LENGTH, "");
+    private static final PrimaryKeyAlias CUSTOM_PK_ALIAS = loadPrimaryKeyAlias();
+
+    private static PrimaryKeyAlias loadPrimaryKeyAlias() {
+        ServiceLoader<PrimaryKeyAlias> loader = ServiceLoader.load(PrimaryKeyAlias.class);
+        if (!loader.iterator().hasNext()) {
+            return null;
+        }
+        return loader.iterator().next();
+    }
 
     public PrimaryKeySnapshotGenerator() {
         super(PrimaryKey.class, new Class[]{Table.class});
@@ -41,12 +52,18 @@ public class PrimaryKeySnapshotGenerator extends HibernateSnapshotGenerator {
             if (hibernatePrimaryKey != null) {
                 PrimaryKey pk = new PrimaryKey();
                 String hbnTableName = hibernateTable.getName();
-
-                String pkName = PK_NAME_ALIAS.toAliasString(hbnTableName);
-                if (pkName.length() == PK_NAME_LENGTH) {
-                    String suffix = "_" + Integer.toHexString(hbnTableName.hashCode()).toUpperCase() + "_" + PK_NAME_SUFFIX;
-                    pkName = pkName.substring(0, PK_NAME_LENGTH - suffix.length()) + suffix;
+                String pkName;
+                if (CUSTOM_PK_ALIAS != null) {
+                    pkName = CUSTOM_PK_ALIAS.toAliasString(hbnTableName);
+                    Scope.getCurrentScope().getLog(getClass()).warning("Changing hibernate primary key name to " + pkName);
+                } else {
+                    pkName = PK_NAME_ALIAS.toAliasString(hbnTableName);
+                    if (pkName.length() == PK_NAME_LENGTH) {
+                        String suffix = "_" + Integer.toHexString(hbnTableName.hashCode()).toUpperCase() + "_" + PK_NAME_SUFFIX;
+                        pkName = pkName.substring(0, PK_NAME_LENGTH - suffix.length()) + suffix;
+                    }
                 }
+
                 pk.setName(pkName);
 
                 pk.setTable(table);
