@@ -1,4 +1,3 @@
-liquibase.ext.hibernate.diff.ChangedForeignKeyChangeGenerator
 liquibase.ext.hibernate.diff.ChangedSequenceChangeGenerator
 liquibase.ext.hibernate.diff.MissingSequenceChangeGenerator
 liquibase.ext.hibernate.diff.UnexpectedIndexChangeGenerator
