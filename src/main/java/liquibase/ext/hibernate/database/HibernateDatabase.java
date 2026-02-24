@@ -9,19 +9,12 @@ import liquibase.exception.UnexpectedLiquibaseException;
 import liquibase.ext.hibernate.customfactory.CustomMetadataFactory;
 import liquibase.ext.hibernate.database.connection.HibernateConnection;
 import liquibase.ext.hibernate.database.connection.HibernateDriver;
-import liquibase.logging.LogFactory;
-import liquibase.logging.LogService;
-import liquibase.logging.Logger;
-import org.hibernate.annotations.common.reflection.ClassLoaderDelegate;
-import org.hibernate.annotations.common.reflection.ClassLoadingException;
 import org.hibernate.boot.Metadata;
 import org.hibernate.boot.MetadataBuilder;
 import org.hibernate.boot.MetadataSources;
-import org.hibernate.boot.internal.MetadataBuilderImpl;
 import org.hibernate.boot.model.naming.ImplicitNamingStrategy;
 import org.hibernate.boot.model.naming.PhysicalNamingStrategy;
 import org.hibernate.boot.registry.StandardServiceRegistryBuilder;
-import org.hibernate.boot.spi.MetadataBuilderImplementor;
 import org.hibernate.cfg.AvailableSettings;
 import org.hibernate.dialect.Dialect;
 import org.hibernate.dialect.MySQLDialect;
@@ -29,11 +22,6 @@ import org.hibernate.engine.jdbc.connections.spi.ConnectionProvider;
 import org.hibernate.engine.jdbc.connections.spi.MultiTenantConnectionProvider;
 import org.hibernate.service.ServiceRegistry;
 
-import java.lang.reflect.Field;
-import java.sql.Connection;
-import java.sql.SQLException;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -47,6 +35,7 @@ public abstract class HibernateDatabase extends AbstractJdbcDatabase {
 
     private boolean indexesForForeignKeys = false;
     public static final String DEFAULT_SCHEMA = "HIBERNATE";
+    public static final String HIBERNATE_TEMP_USE_JDBC_METADATA_DEFAULTS = "hibernate.temp.use_jdbc_metadata_defaults";
 
     public HibernateDatabase() {
         setDefaultCatalogName(DEFAULT_SCHEMA);
@@ -196,8 +185,9 @@ public abstract class HibernateDatabase extends AbstractJdbcDatabase {
 
         ServiceRegistry standardRegistry = new StandardServiceRegistryBuilder()
                 .applySetting(AvailableSettings.DIALECT, dialect)
+                .applySetting(HibernateDatabase.HIBERNATE_TEMP_USE_JDBC_METADATA_DEFAULTS, Boolean.FALSE.toString())
                 .addService(ConnectionProvider.class, new NoOpConnectionProvider())
-                .addService(MultiTenantConnectionProvider.class, new NoOpConnectionProvider())
+                .addService(MultiTenantConnectionProvider.class, new NoOpMultiTenantConnectionProvider())
                 .build();
 
         return new MetadataSources(standardRegistry);
@@ -209,19 +199,6 @@ public abstract class HibernateDatabase extends AbstractJdbcDatabase {
      */
     protected abstract void configureSources(MetadataSources sources) throws DatabaseException;
 
-
-    protected void configureNewIdentifierGeneratorSupport(String value, MetadataBuilder builder) throws DatabaseException {
-        String _value;
-        _value = getHibernateConnection().getProperties().getProperty(AvailableSettings.USE_NEW_ID_GENERATOR_MAPPINGS, value);
-
-        try {
-            if (_value != null) {
-                builder.enableNewIdentifierGeneratorSupport(Boolean.valueOf(_value));
-            }
-        } catch (Exception e) {
-            throw new DatabaseException(e);
-        }
-    }
 
     protected void configurePhysicalNamingStrategy(String physicalNamingStrategy, MetadataBuilder builder) throws DatabaseException {
         String namingStrategy;
@@ -281,7 +258,6 @@ public abstract class HibernateDatabase extends AbstractJdbcDatabase {
      * Called by {@link #buildMetadataFromPath()} to do final configuration on the {@link MetadataBuilder} before {@link MetadataBuilder#build()} is called.
      */
     protected void configureMetadataBuilder(MetadataBuilder metadataBuilder) throws DatabaseException {
-        configureNewIdentifierGeneratorSupport(getProperty(AvailableSettings.USE_NEW_ID_GENERATOR_MAPPINGS), metadataBuilder);
         configureImplicitNamingStrategy(getProperty(AvailableSettings.IMPLICIT_NAMING_STRATEGY), metadataBuilder);
         configurePhysicalNamingStrategy(getProperty(AvailableSettings.PHYSICAL_NAMING_STRATEGY), metadataBuilder);
         metadataBuilder.enableGlobalNationalizedCharacterDataSupport(
@@ -353,57 +329,7 @@ public abstract class HibernateDatabase extends AbstractJdbcDatabase {
 
     @Override
     public boolean supportsCatalogs() {
-        return false;
+        return true;
     }
 
-    /**
-     * Used by hibernate to ensure no database access is performed.
-     */
-    static class NoOpConnectionProvider implements ConnectionProvider, MultiTenantConnectionProvider {
-
-        @Override
-        public Connection getConnection() throws SQLException {
-            throw new SQLException("No connection");
-        }
-
-        @Override
-        public void closeConnection(Connection conn) throws SQLException {
-
-        }
-
-        @Override
-        public boolean supportsAggressiveRelease() {
-            return false;
-        }
-
-        @Override
-        public boolean isUnwrappableAs(Class unwrapType) {
-            return false;
-        }
-
-        @Override
-        public <T> T unwrap(Class<T> unwrapType) {
-            return null;
-        }
-
-        @Override
-        public Connection getAnyConnection() throws SQLException {
-            return getConnection();
-        }
-
-        @Override
-        public void releaseAnyConnection(Connection connection) throws SQLException {
-
-        }
-
-        @Override
-        public Connection getConnection(String tenantIdentifier) throws SQLException {
-            return getConnection();
-        }
-
-        @Override
-        public void releaseConnection(String tenantIdentifier, Connection connection) throws SQLException {
-
-        }
-    }
 }

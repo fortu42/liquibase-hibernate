@@ -1,22 +1,25 @@
 package liquibase.ext.hibernate.database;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.List;
 
-import javax.persistence.spi.PersistenceUnitInfo;
-
-import liquibase.Scope;
+import org.hibernate.bytecode.enhance.spi.EnhancementContext;
 import org.hibernate.cfg.AvailableSettings;
 import org.hibernate.envers.configuration.EnversSettings;
 import org.hibernate.jpa.boot.internal.EntityManagerFactoryBuilderImpl;
+import org.hibernate.jpa.boot.internal.PersistenceUnitInfoDescriptor;
 import org.hibernate.jpa.boot.spi.Bootstrap;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.DefaultResourceLoader;
 import org.springframework.orm.jpa.persistenceunit.DefaultPersistenceUnitManager;
 import org.springframework.orm.jpa.persistenceunit.SmartPersistenceUnitInfo;
 import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
-
+import org.springframework.core.NativeDetector;
+import jakarta.persistence.spi.PersistenceUnitInfo;
+import liquibase.Scope;
 import liquibase.database.DatabaseConnection;
 import liquibase.database.jvm.JdbcConnection;
 import liquibase.exception.DatabaseException;
@@ -92,18 +95,45 @@ public class HibernateSpringPackageDatabase extends JpaPersistenceDatabase {
 
         Map<String, String> map = new HashMap<>();
         map.put(AvailableSettings.DIALECT, getProperty(AvailableSettings.DIALECT));
+        map.put(HibernateDatabase.HIBERNATE_TEMP_USE_JDBC_METADATA_DEFAULTS, Boolean.FALSE.toString());
         map.put(AvailableSettings.USE_SECOND_LEVEL_CACHE, Boolean.FALSE.toString());
         map.put(AvailableSettings.PHYSICAL_NAMING_STRATEGY, getHibernateConnection().getProperties().getProperty(AvailableSettings.PHYSICAL_NAMING_STRATEGY));
         map.put(AvailableSettings.IMPLICIT_NAMING_STRATEGY, getHibernateConnection().getProperties().getProperty(AvailableSettings.IMPLICIT_NAMING_STRATEGY));
         map.put(AvailableSettings.SCANNER_DISCOVERY, "");	// disable scanning of all classes and hbm.xml files. Only scan speficied packages
         map.put(EnversSettings.AUDIT_TABLE_PREFIX,getHibernateConnection().getProperties().getProperty(EnversSettings.AUDIT_TABLE_PREFIX,""));
         map.put(EnversSettings.AUDIT_TABLE_SUFFIX,getHibernateConnection().getProperties().getProperty(EnversSettings.AUDIT_TABLE_SUFFIX,"_AUD"));
+        map.put(EnversSettings.REVISION_FIELD_NAME,getHibernateConnection().getProperties().getProperty(EnversSettings.REVISION_FIELD_NAME,"REV"));
+        map.put(EnversSettings.REVISION_TYPE_FIELD_NAME,getHibernateConnection().getProperties().getProperty(EnversSettings.REVISION_TYPE_FIELD_NAME,"REVTYPE"));
         map.put(AvailableSettings.USE_NATIONALIZED_CHARACTER_DATA, getProperty(AvailableSettings.USE_NATIONALIZED_CHARACTER_DATA));
-
-        EntityManagerFactoryBuilderImpl builder = (EntityManagerFactoryBuilderImpl) Bootstrap.getEntityManagerFactoryBuilder(persistenceUnitInfo, map);
+        map.put(AvailableSettings.TIMEZONE_DEFAULT_STORAGE, getProperty(AvailableSettings.TIMEZONE_DEFAULT_STORAGE));
+        PersistenceUnitInfoDescriptor persistenceUnitInfoDescriptor = createPersistenceUnitInfoDescriptor(persistenceUnitInfo);
+        EntityManagerFactoryBuilderImpl builder = (EntityManagerFactoryBuilderImpl) Bootstrap.getEntityManagerFactoryBuilder(persistenceUnitInfoDescriptor, map);
         
         return builder;
     }
+
+
+    public PersistenceUnitInfoDescriptor createPersistenceUnitInfoDescriptor(PersistenceUnitInfo info) {
+        final List<String> mergedClassesAndPackages = new ArrayList<>(info.getManagedClassNames());
+        if (info instanceof SmartPersistenceUnitInfo ) {
+            mergedClassesAndPackages.addAll(((SmartPersistenceUnitInfo)info).getManagedPackages());
+        }
+        return
+                new PersistenceUnitInfoDescriptor(info) {
+                    @Override
+                    public List<String> getManagedClassNames() {
+                        return mergedClassesAndPackages;
+                    }
+
+                    @Override
+                    public void pushClassTransformer(EnhancementContext enhancementContext) {
+                        if (!NativeDetector.inNativeImage()) {
+                            super.pushClassTransformer(enhancementContext);
+                        }
+                    }
+                };
+    }
+
 
     @Override
     public String getShortName() {

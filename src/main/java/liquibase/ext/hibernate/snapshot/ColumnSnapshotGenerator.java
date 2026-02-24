@@ -1,5 +1,19 @@
 package liquibase.ext.hibernate.snapshot;
 
+import java.util.List;
+import java.util.Optional;
+import java.util.Properties;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import liquibase.snapshot.SnapshotGenerator;
+import org.hibernate.boot.spi.MetadataImplementor;
+import org.hibernate.dialect.Dialect;
+import org.hibernate.dialect.PostgreSQLDialect;
+import org.hibernate.id.ExportableColumn;
+import org.hibernate.mapping.SimpleValue;
+import org.hibernate.type.SqlTypes;
+
 import liquibase.Scope;
 import liquibase.datatype.DataTypeFactory;
 import liquibase.datatype.core.UnknownType;
@@ -15,23 +29,16 @@ import liquibase.structure.core.Relation;
 import liquibase.structure.core.Table;
 import liquibase.util.SqlUtil;
 import liquibase.util.StringUtil;
-import org.hibernate.boot.Metadata;
-import org.hibernate.dialect.Dialect;
-import org.hibernate.dialect.PostgreSQL81Dialect;
-import org.hibernate.id.ExportableColumn;
-import org.hibernate.mapping.SimpleValue;
 
-import java.util.Iterator;
-import java.util.List;
-import java.util.Properties;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
- * Columns are snapshotted along with with Tables in {@link TableSnapshotGenerator} but this class needs to be here to keep the default ColumnSnapshotGenerator from running.
+ * Columns are snapshotted along with Tables in {@link TableSnapshotGenerator} but this class needs to be here to keep the default ColumnSnapshotGenerator from running.
  * Ideally the column logic would be moved out of the TableSnapshotGenerator to better work in situations where the object types to snapshot are being controlled, but that is not the case yet.
  */
 public class ColumnSnapshotGenerator extends HibernateSnapshotGenerator {
+
+    private static final String SQL_TIMEZONE_SUFFIX = "with time zone";
+    private static final String LIQUIBASE_TIMEZONE_SUFFIX = "with timezone";
 
     private final static Pattern pattern = Pattern.compile("([^\\(]*)\\s*\\(?\\s*(max|\\d*)?\\s*,?\\s*(\\d*)?\\s*([^\\(]*?)\\)?");
 
@@ -69,9 +76,7 @@ public class ColumnSnapshotGenerator extends HibernateSnapshotGenerator {
                 return;
             }
 
-            Iterator columnIterator = hibernateTable.getColumnIterator();
-            while (columnIterator.hasNext()) {
-                org.hibernate.mapping.Column hibernateColumn = (org.hibernate.mapping.Column) columnIterator.next();
+            for (org.hibernate.mapping.Column hibernateColumn: hibernateTable.getColumns()) {
                 Column column = new Column();
                 column.setName(hibernateColumn.getName());
                 column.setRelation((Table) foundObject);
@@ -94,15 +99,14 @@ public class ColumnSnapshotGenerator extends HibernateSnapshotGenerator {
         }
 
         Dialect dialect = database.getDialect();
-        Metadata metadata = database.getMetadata();
+        MetadataImplementor metadata = (MetadataImplementor) database.getMetadata();
 
-        Iterator columnIterator = hibernateTable.getColumnIterator();
-        while (columnIterator.hasNext()) {
-            org.hibernate.mapping.Column hibernateColumn = (org.hibernate.mapping.Column) columnIterator.next();
+        for (org.hibernate.mapping.Column hibernateColumn: hibernateTable.getColumns()) {
             if (hibernateColumn.getName().equalsIgnoreCase(column.getName())) {
 
                 String defaultValue = null;
-                String hibernateType = hibernateColumn.getSqlType(dialect, metadata);
+                String hibernateType = hibernateColumn.getSqlType(metadata);
+
                 Matcher defaultValueMatcher = Pattern.compile("(?i) DEFAULT\\s+(.*)").matcher(hibernateType);
                 if (defaultValueMatcher.find()) {
                     defaultValue = defaultValueMatcher.group(1);
@@ -118,7 +122,15 @@ public class ColumnSnapshotGenerator extends HibernateSnapshotGenerator {
                 Scope.getCurrentScope().getLog(getClass()).info("Found column " + column.getName() + " " + column.getType().toString());
 
                 column.setRemarks(hibernateColumn.getComment());
-                if (hibernateColumn.getValue() instanceof SimpleValue) {
+
+                // DataTypeFactory.from and SqlUtil.parseValue rely on the database type however,
+                // the liquibase-core does not know about the fake hibernate database so not all conditions
+                // are handled correctly for enums.
+                boolean isEnumType =  Optional.ofNullable(dataType.getDataTypeId())
+                        .map(SqlTypes::isEnumType)
+                        .orElse(false);
+
+                if (!isEnumType && hibernateColumn.getValue() instanceof SimpleValue) {
                     DataType parseType;
                     if (DataTypeFactory.getInstance().from(dataType, database) instanceof UnknownType) {
                         parseType = new DataType(((SimpleValue) hibernateColumn.getValue()).getTypeName());
@@ -160,7 +172,7 @@ public class ColumnSnapshotGenerator extends HibernateSnapshotGenerator {
                             identifierGeneratorStrategy = hibernateColumn.getValue().isSimpleValue() ? ((SimpleValue) hibernateColumn.getValue()).getIdentifierGeneratorStrategy() : null;
 
                             if (("native".equalsIgnoreCase(identifierGeneratorStrategy) || "identity".equalsIgnoreCase(identifierGeneratorStrategy))) {
-                                if (PostgreSQL81Dialect.class.isAssignableFrom(dialect.getClass())) {
+                                if (PostgreSQLDialect.class.isAssignableFrom(dialect.getClass())) {
                                     column.setAutoIncrementInformation(new Column.AutoIncrementInformation());
                                     String sequenceName = (column.getRelation().getName() + "_" + column.getName() + "_seq").toLowerCase();
                                     column.setDefaultValue(new DatabaseFunction("nextval('" + sequenceName + "'::regclass)"));
@@ -181,34 +193,65 @@ public class ColumnSnapshotGenerator extends HibernateSnapshotGenerator {
         }
     }
 
-    protected DataType toDataType(String hibernateType, Integer sqlTypeCode) throws DatabaseException {
+    protected DataType toDataType(String hibernateType, Integer sqlTypeCode) {
         Matcher matcher = pattern.matcher(hibernateType);
         if (!matcher.matches()) {
             return null;
         }
-        DataType dataType = new DataType(matcher.group(1));
-        if (matcher.group(3).isEmpty()) {
-            if (!matcher.group(2).isEmpty()) {
-                if (matcher.group(2).equalsIgnoreCase("max")) {
-                    dataType.setTypeName(dataType.getTypeName() + "(max)");
-                } else {
-                    dataType.setColumnSize(Integer.parseInt(matcher.group(2)));
+
+        DataType dataType;
+
+        // Small hack for enums until DataType adds support for them
+        if (Optional.ofNullable(sqlTypeCode).map(SqlTypes::isEnumType).orElse(false)) {
+            dataType = new DataType(hibernateType);
+        } else {
+            String typeName = matcher.group(1);
+
+            // Liquibase seems to use 'with timezone' instead of 'with time zone',
+            // so we remove any 'with time zone' suffixes here.
+            // The corresponding 'with timezone' suffix will then be added below,
+            // because in that case hibernateType also ends with 'with time zone'.
+            if (typeName.toLowerCase().endsWith(SQL_TIMEZONE_SUFFIX)) {
+                typeName = typeName.substring(0, typeName.length() - SQL_TIMEZONE_SUFFIX.length()).stripTrailing();
+            }
+
+            // If hibernateType ends with 'with time zone' we need to add the corresponding
+            // 'with timezone' suffix to the Liquibase type.
+            if (hibernateType.toLowerCase().endsWith(SQL_TIMEZONE_SUFFIX)) {
+                typeName += (" " + LIQUIBASE_TIMEZONE_SUFFIX);
+            }
+
+            dataType = new DataType(typeName);
+            if (matcher.group(3).isEmpty()) {
+                if (!matcher.group(2).isEmpty()) {
+                    if (matcher.group(2).equalsIgnoreCase("max")) {
+                        dataType.setTypeName(dataType.getTypeName() + "(max)");
+                    } else {
+                        dataType.setColumnSize(Integer.parseInt(matcher.group(2)));
+                    }
+                }
+            } else {
+                dataType.setColumnSize(Integer.parseInt(matcher.group(2)));
+                dataType.setDecimalDigits(Integer.parseInt(matcher.group(3)));
+            }
+
+            String extra = StringUtil.trimToNull(matcher.group(4));
+            if (extra != null) {
+                if (extra.equalsIgnoreCase("char")) {
+                    dataType.setColumnSizeUnit(DataType.ColumnSizeUnit.CHAR);
                 }
             }
-        } else {
-            dataType.setColumnSize(Integer.parseInt(matcher.group(2)));
-            dataType.setDecimalDigits(Integer.parseInt(matcher.group(3)));
         }
 
-        String extra = StringUtil.trimToNull(matcher.group(4));
-        if (extra != null) {
-            if (extra.equalsIgnoreCase("char")) {
-                dataType.setColumnSizeUnit(DataType.ColumnSizeUnit.CHAR);
-            }
-        }
+        Scope.getCurrentScope().getLog(getClass()).info("Converted column data type - hibernate type: " + hibernateType + ", SQL type: " + sqlTypeCode + ", type name: " + dataType.getTypeName());
 
         dataType.setDataTypeId(sqlTypeCode);
         return dataType;
+    }
+
+    @Override
+    public Class<? extends SnapshotGenerator>[] replaces() {
+        return new Class[]{liquibase.snapshot.jvm.ColumnSnapshotGenerator.class};
     }
 
 }

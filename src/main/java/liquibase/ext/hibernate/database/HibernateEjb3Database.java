@@ -6,12 +6,6 @@ import java.security.PrivilegedAction;
 import java.util.HashMap;
 import java.util.Map;
 
-import javax.persistence.EntityManagerFactory;
-import javax.persistence.metamodel.ManagedType;
-import javax.persistence.spi.PersistenceUnitTransactionType;
-
-import liquibase.Scope;
-import liquibase.logging.LogService;
 import org.hibernate.boot.Metadata;
 import org.hibernate.boot.MetadataSources;
 import org.hibernate.cfg.AvailableSettings;
@@ -21,9 +15,12 @@ import org.hibernate.jpa.boot.internal.EntityManagerFactoryBuilderImpl;
 import org.hibernate.jpa.boot.spi.EntityManagerFactoryBuilder;
 import org.hibernate.jpa.boot.spi.PersistenceUnitDescriptor;
 
+import jakarta.persistence.EntityManagerFactory;
+import jakarta.persistence.metamodel.ManagedType;
+import jakarta.persistence.spi.PersistenceUnitTransactionType;
+import liquibase.Scope;
 import liquibase.database.DatabaseConnection;
 import liquibase.exception.DatabaseException;
-import liquibase.logging.LogFactory;
 
 /**
  * Database implementation for "ejb3" hibernate configurations.
@@ -80,6 +77,7 @@ public class HibernateEjb3Database extends HibernateDatabase {
         MyHibernatePersistenceProvider persistenceProvider = new MyHibernatePersistenceProvider();
 
         Map<String, Object> properties = new HashMap<>();
+        properties.put(HibernateDatabase.HIBERNATE_TEMP_USE_JDBC_METADATA_DEFAULTS, Boolean.FALSE.toString());
         properties.put(AvailableSettings.USE_SECOND_LEVEL_CACHE, Boolean.FALSE.toString());
         properties.put(AvailableSettings.USE_NATIONALIZED_CHARACTER_DATA, getProperty(AvailableSettings.USE_NATIONALIZED_CHARACTER_DATA));
 
