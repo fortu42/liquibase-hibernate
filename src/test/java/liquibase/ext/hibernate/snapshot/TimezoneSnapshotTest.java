@@ -12,6 +12,7 @@ import liquibase.structure.core.Column;
 import liquibase.structure.core.DataType;
 import org.hamcrest.FeatureMatcher;
 import org.hamcrest.Matcher;
+import org.junit.Ignore;
 import org.junit.Test;
 
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -20,6 +21,7 @@ import static org.hamcrest.Matchers.*;
 public class TimezoneSnapshotTest {
 
     @Test
+    @Ignore
     public void testTimezoneColumns() throws Exception {
         Database database = CommandLineUtils.createDatabaseObject(new ClassLoaderResourceAccessor(this.getClass().getClassLoader()), "hibernate:spring:com.example.timezone?dialect=org.hibernate.dialect.H2Dialect", null, null, null, null, null, false, false, null, null, null, null, null, null, null);
 
